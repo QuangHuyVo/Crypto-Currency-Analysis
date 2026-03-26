@@ -1,0 +1,17 @@
+:root {
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+  color: #e8eaed;
+  background: #0f1419;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}

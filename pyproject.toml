@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crypto-dashboard"
+version = "0.1.0"
+description = "Binance market data + ML forecast dashboard"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "httpx>=0.27",
+  "websockets>=13",
+  "ccxt>=4.4",
+  "pandas>=2.2",
+  "scikit-learn>=1.5",
+  "numpy>=2",
+  "aiosqlite>=0.20",
+  "joblib>=1.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+]
+
+[project.scripts]
+train-model = "app.ml.train:main"
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["backend"]
+testpaths = ["tests"]

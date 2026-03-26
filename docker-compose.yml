@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_PATH=/data/candles.db
+      - MODELS_DIR=/data/models
+    volumes:
+      - crypto-data:/data
+
+volumes:
+  crypto-data:
