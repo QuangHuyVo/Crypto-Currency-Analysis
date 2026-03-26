@@ -38,6 +38,8 @@ type Props = {
   /** Increments when symbol, interval, or chart type changes — triggers fitContent; polling must not bump this. */
   viewRevision: number;
   onCrosshair: (p: CrosshairOHLC | null) => void;
+  /** Bar open time in ms (UTC) when user clicks the chart at the crosshair time. */
+  onBarClick?: (barOpenTimeMs: number) => void;
 };
 
 function buildCandleData(bars: CandleBar[]): CandlestickData[] {
@@ -65,7 +67,7 @@ function buildVolumeData(bars: CandleBar[]): HistogramData[] {
   }));
 }
 
-export function CandleVolumeChart({ candles, interval, chartType, viewRevision, onCrosshair }: Props) {
+export function CandleVolumeChart({ candles, interval, chartType, viewRevision, onCrosshair, onBarClick }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const priceSeriesRef = useRef<ISeriesApi<"Candlestick"> | ISeriesApi<"Line"> | null>(null);
@@ -75,6 +77,8 @@ export function CandleVolumeChart({ candles, interval, chartType, viewRevision, 
   candlesRef.current = candles;
   const cbRef = useRef(onCrosshair);
   cbRef.current = onCrosshair;
+  const clickRef = useRef(onBarClick);
+  clickRef.current = onBarClick;
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -134,6 +138,14 @@ export function CandleVolumeChart({ candles, interval, chartType, viewRevision, 
       (priceSeries as ISeriesApi<"Candlestick">).setData(buildCandleData(candlesRef.current));
     }
     volumeSeries.setData(buildVolumeData(candlesRef.current));
+
+    chart.subscribeClick((param) => {
+      const fn = clickRef.current;
+      if (!fn || param.time == null || typeof param.time !== "number") return;
+      const ts = param.time;
+      const bar = candlesRef.current.find((b) => Math.floor(b.time / 1000) === ts);
+      if (bar) fn(bar.time);
+    });
 
     chart.subscribeCrosshairMove((param) => {
       if (!param.point || param.point.x < 0 || param.point.y < 0) {

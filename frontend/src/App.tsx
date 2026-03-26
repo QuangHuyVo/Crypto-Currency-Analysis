@@ -6,6 +6,7 @@ import {
   type CrosshairOHLC,
 } from "./components/CandleVolumeChart";
 import { SymbolSearch } from "./components/SymbolSearch";
+import { isAsOfPredictionInterval } from "./predictionPolicy";
 
 const INTERVALS = ["1m", "5m", "15m", "1h", "4h", "1d", "1w", "1M"] as const;
 type Interval = (typeof INTERVALS)[number];
@@ -57,6 +58,8 @@ type PredictResponse = {
   model_version?: string;
   last_bar_time_ms?: number;
   detail?: string;
+  /** From API when supported: latest pipeline vs explicit as-of bar. */
+  prediction_anchor?: string;
 };
 
 function readUrlState(): { symbol: string; interval: Interval } {
@@ -102,10 +105,19 @@ export default function App() {
   const [viewRevision, setViewRevision] = useState(1);
   const viewKeyRef = useRef(`${initial.symbol}|${initial.interval}|candle`);
   const [ohlcLegend, setOhlcLegend] = useState<CrosshairOHLC | null>(null);
+  const predictionAsOfMsRef = useRef<number | null>(null);
+  const predictDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [asOfHint, setAsOfHint] = useState<string | null>(null);
 
   const onCrosshair = useCallback((p: CrosshairOHLC | null) => {
     setOhlcLegend(p);
   }, []);
+
+  useEffect(() => {
+    if (!asOfHint) return;
+    const t = window.setTimeout(() => setAsOfHint(null), 4500);
+    return () => window.clearTimeout(t);
+  }, [asOfHint]);
 
   useEffect(() => {
     void (async () => {
@@ -177,16 +189,36 @@ export default function App() {
   }, [symbol, interval]);
 
   const loadPredict = useCallback(async () => {
+    const asOfMs = predictionAsOfMsRef.current;
     try {
       const u = new URL("/api/predict", window.location.origin);
       u.searchParams.set("symbol", symbol);
       u.searchParams.set("interval", interval);
+      if (asOfMs != null) u.searchParams.set("as_of", new Date(asOfMs).toISOString());
       const res = await fetch(u.toString());
+      const raw = await res.text();
       if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t || `${res.status}`);
+        let detail = raw || `${res.status}`;
+        try {
+          const j = JSON.parse(raw) as { detail?: { message?: string; reason?: string } | string };
+          const d = j.detail;
+          if (typeof d === "object" && d !== null && "message" in d && typeof d.message === "string") {
+            detail = d.message;
+          } else if (typeof d === "string") detail = d;
+        } catch {
+          /* keep detail */
+        }
+        setPred({
+          available: false,
+          reason: "request_failed",
+          disclaimer:
+            "Experimental ML output only; not financial advice. Past performance does not guarantee future results.",
+          detail,
+          prediction_anchor: asOfMs != null ? "as_of" : "latest",
+        });
+        return;
       }
-      setPred((await res.json()) as PredictResponse);
+      setPred(JSON.parse(raw) as PredictResponse);
     } catch (e) {
       setPred({
         available: false,
@@ -194,11 +226,36 @@ export default function App() {
         disclaimer:
           "Experimental ML output only; not financial advice. Past performance does not guarantee future results.",
         detail: e instanceof Error ? e.message : String(e),
+        prediction_anchor: asOfMs != null ? "as_of" : "latest",
       });
     }
   }, [symbol, interval]);
 
+  const schedulePredictAtBar = useCallback(
+    (openTimeMs: number) => {
+      if (predictDebounceRef.current) window.clearTimeout(predictDebounceRef.current);
+      predictDebounceRef.current = window.setTimeout(() => {
+        predictDebounceRef.current = null;
+        predictionAsOfMsRef.current = openTimeMs;
+        void loadPredict();
+      }, 320);
+    },
+    [loadPredict],
+  );
+
+  const onChartBarClicked = useCallback(
+    (openTimeMs: number) => {
+      if (!isAsOfPredictionInterval(interval)) {
+        setAsOfHint("As-of prediction runs on 4h, 1d, 1w, and 1M. Switch timeframe or rely on the auto latest prediction.");
+        return;
+      }
+      schedulePredictAtBar(openTimeMs);
+    },
+    [interval, schedulePredictAtBar],
+  );
+
   useEffect(() => {
+    predictionAsOfMsRef.current = null;
     void loadHistory();
     void loadPredict();
   }, [loadHistory, loadPredict]);
@@ -356,6 +413,7 @@ export default function App() {
           chartType={chartType}
           viewRevision={viewRevision}
           onCrosshair={onCrosshair}
+          onBarClick={onChartBarClicked}
         />
       </div>
 
@@ -370,6 +428,15 @@ export default function App() {
         }}
       >
         <h2 style={{ margin: "0 0 0.5rem", fontSize: "0.95rem", color: theme.text }}>Prediction</h2>
+        <p style={{ margin: "0 0 0.35rem", fontSize: "0.78rem", color: theme.muted }}>
+          4h+ timeframes: click the chart to predict as of the bar under the crosshair. Shorter intervals use the latest
+          auto-refresh only.
+        </p>
+        {asOfHint && (
+          <p style={{ margin: "0 0 0.35rem", fontSize: "0.82rem", color: "#fbbf24" }} role="status">
+            {asOfHint}
+          </p>
+        )}
         {!pred && <p style={{ margin: 0, color: theme.muted }}>Loading prediction…</p>}
         {pred && pred.available && (
           <div style={{ fontSize: "0.88rem" }}>
@@ -381,7 +448,13 @@ export default function App() {
             </p>
             {pred.last_bar_time_ms != null && (
               <p style={{ margin: "0.25rem 0" }}>
-                <strong>Last bar (UTC ms):</strong> {pred.last_bar_time_ms}
+                <strong>{pred.prediction_anchor === "as_of" ? "As-of bar (UTC):" : "Feature bar (UTC):"}</strong>{" "}
+                {new Date(pred.last_bar_time_ms).toISOString()}
+                {pred.prediction_anchor === "as_of" &&
+                  bars.length > 0 &&
+                  pred.last_bar_time_ms === bars[bars.length - 1]?.time && (
+                    <span style={{ color: theme.muted }}> — current bar (as of last update)</span>
+                  )}
               </p>
             )}
             <p style={{ fontSize: "0.8rem", color: theme.muted, margin: "0.5rem 0 0" }}>{pred.disclaimer}</p>
